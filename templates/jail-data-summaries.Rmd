@@ -1,0 +1,443 @@
+---
+title: "Cook County Correctional Facility Data Summary"
+description: "Summary of administrative and movement data."
+author:
+  - name: "Krzysztof Sakrejda"
+  - url: "https://github.com/epibayes/jail-model"
+  - affiliation: "Epibayes"
+  - affiliation_url: "https://epibayes.io"
+date: "`r Sys.Date()`"
+output: distill::distill_article
+params: 
+  standard_capacity_data: "tibble::tibble()"
+  standard_occupancy_data: "tibble::tibble()"
+  duration_of_detention_quantiles: "tibble::tibble()"
+  standard_count_data: "tibble::tibble()"
+  applied_test_sensitivity: "0"
+  building_count: "tibble::tibble()"
+  building_percentage: "tibble::tibble()"
+  unit_transition_plot: "ggplot()"
+  unit_mmo: "tibble::tibble()"
+---
+
+```{r setup, include=FALSE}
+library(magrittr)
+library(ggplot2)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+Our simulations are based on summaries that represent the processes in
+place at the Cook County Department of Corrections site in Chicago Illinois.  
+We combined administrative data with summaries of past studies and 
+individual correspondence to characterize the intake of detainees, 
+movement within the facility at the unit level, timing of movement, 
+timing of release, and facility structure to produce this overview.
+
+# Facility 
+
+```{r capacity, include = FALSE}
+n_units = params$standard_capacity_data %>% nrow()
+building_capacity = params$standard_capacity_data %>% 
+  dplyr::group_by(building, type) %>% 
+  dplyr::summarise(
+    `# of units` = dplyr::n(),
+    `housing capacity` = capacity %>% as.numeric() %>% sum)
+```
+
+We focused on the main living units on the CCDC campus, including seven celled
+units, three dorms, a residential treatment unit (RTU), and the single "Boot
+Camp" unit.
+
+```{r building-capacity-chart, include = TRUE}
+#rmarkdown::paged_table(building_capacity, 
+#  options = list(rows.print = 20, paged.print = FALSE))
+knitr::kable(building_capacity, caption = 'Building units and capacity')
+```
+
+# Intake Process
+
+```{r intake-diagram, layout="l-body-outset"}
+intake_fig_path = workflow::project_file("static", "diagrams", "covid-jail-intake-diagram.svg")
+```
+
+Incoming detainees are administered
+a rapid COVID-19 test, followed by an X-ray screening for tuberculosis which can
+uncover both symptomatic and asymptomatic COVID-19 cases.  Individuals testing
+positive for COVID-19 or with abnormal chest X-rays images are effectively
+isolated.  Individuals who are COVID-19+ a single COVID-19+ cohort, and those with 
+chest X-ray abnormalities are classified as "Persons Under Investigation" (PUI)
+and separated individually until that status is resolved.  Those with normal 
+results are transferred to daily cohorts for 14 days, retested, and then 
+released into the general population once they are cleared by [WHO?].  Individuals 
+testing negative with additional medical needs enter the Residential Treatment 
+Unit (RTU) intake cohort for 14 days and are not cohorted into daily groups.
+
+![Figure 1: Diagram of the jail intake process. The three intake cohorts are COVID-19+
+(or with abnormal chest X-rays, although those are isolated separately), daily
+COVID-19 negative cohorts with daily symptomatic screening, and the mixed
+Residential Treatment Unit (RTU) intake cohort.](`r intake_fig_path`){width=100%}
+
+```{r blank, fig.caption = "", include = FALSE}
+```
+
+Typically between days 10 and 14 days all individuals are screened for COVID-19 
+via a PCR test and upon a negative test they are admitted to the general population.
+Those who are screened and test positive at any point in time join the COVID-19
+positive cohort until they are medically cleared to join the general
+population.  Those in the mixed RTU cohort enter the general RTU population
+after 14 days if negative for COVID-19 on a PCR test.
+
+# Intake of detainees and duration of detention
+
+
+```{r intake-data, include = FALSE}
+iqr = quantile(params$standard_count_data$intake, probs = c(0.25, 0.75), na.rm = TRUE)
+l1_pacf = params$standard_count_data$intake %>% 
+  purrr::discard(is.na) %>% 
+  pacf(lag.max = 10) %>% 
+  `[[`('acf') %>% `[`(1,1,1) %>%
+  round(2)
+```
+
+Daily detainee intake count is relatively consistent, has an 
+IQR of [`r paste0(iqr[1], ", ", iqr[2])`] and shows positive 
+autocorrelation (partial autocorrelation of `r l1_pacf` at lag 1).
+
+```{r intake-time-series, layout="l-body-outset", include = TRUE, fig.cap = "Daily detainee intake count for the period covered by the data and the corresponding histogram of daily intake counts."} 
+pl_ts = ggplot() + 
+  geom_line(
+    data = params$standard_count_data %>% dplyr::select(date, intake),
+    aes(x = date, y = intake)
+  ) + theme_minimal() +
+      scale_x_datetime("Date", 
+        limits = c(lubridate::ymd_hms("2020-05-01 00:00:00"), 
+                   lubridate::ymd_hms("2021-04-01 00:00:00"))) +
+      scale_y_continuous("Daily detainee intake (count)")
+pl_hist = ggplot() +
+  geom_histogram(
+    data = params$standard_count_data %>% dplyr::select(date, intake),
+    aes(x = intake), bins = 100
+  ) + theme_minimal() +
+      scale_x_continuous("") +
+      scale_y_continuous("count") +
+      coord_flip()
+pl = gridExtra::arrangeGrob(pl_ts, pl_hist, 
+  layout_matrix = matrix(data = c(1, 1, 1, 1, 2), nrow = 1, ncol = 5)) 
+grid::grid.draw(pl)
+```
+
+
+A quarter of all individuals are released within a week of initial detention
+and half of all individuals are released within 17 days.  An addtional quarter
+remain detained up to three months and the longest detentions recorded in our 
+dataset were over a year in duration.  This limits the opportunity for any
+particular individual to be affected by within-jail transmission but does
+increase the likelyhood that cases originating in the jail will be spread
+in the community once detainees are released.  It also increases the number of 
+potentially exposed individuals as the jail population is relatively constant
+despite the fast turnover.
+
+
+```{r duration-of-detention, include = TRUE, fig.cap = "Empirical cumulative distribution for the duration of detention, x-axis is the duration of detention (from the MRSA data) and y-axis is the percentile for that duration.  It takes about 87 days to cover the 75% of detentions and there's a long tail up to two years."}
+pl = ggplot(
+  data = params$duration_of_detention_quantiles,
+  aes(x = duration_of_detention, y = (percentile * 100))
+) + geom_line() +
+    geom_text(
+      data = params$duration_of_detention_quantiles %>%
+        dplyr::filter(percentile %in% c(0.25, 0.5, 0.75)),
+      aes(x = duration_of_detention + 10, y = (percentile * 100) - 5, 
+          label = round(duration_of_detention))) +
+    geom_point(
+      data = params$duration_of_detention_quantiles %>%
+        dplyr::filter(percentile %in% c(0.25, 0.5, 0.75, 0.9)),
+      aes(x = duration_of_detention, y = (percentile * 100)),
+      color = 'red') +
+    scale_x_continuous("Duration of detention (days)") +
+    scale_y_continuous("Percentile (%)") +
+    theme_minimal()
+print(pl)
+```
+
+```{r occupancy-data, include = FALSE}
+total_occupancy = params$standard_occupancy_data %>%
+  dplyr::group_by(date) %>%
+  dplyr::summarize(count = sum(count)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(
+    count = dplyr::if_else(is.na(count), 
+      (dplyr::lag(count) + dplyr::lead(count))/2, count),
+    lead_count = dplyr::lead(count)
+  )
+intake_discharge = total_occupancy %>% 
+  dplyr::mutate(date = lubridate::as_date(date)) %>%
+  dplyr::left_join(
+    y = params$standard_count_data %>%
+      dplyr::select(date, intake, isolated_count, cumulative_covid_count, covid_count) %>%
+      dplyr::mutate(date = lubridate::as_date(date)), 
+    by = 'date') %>%
+  dplyr::mutate(
+    intake_imputed = is.na(intake),
+    intake = dplyr::case_when(
+      !intake_imputed ~ intake,
+      intake_imputed ~ sample(
+        x = intake %>% purrr::discard(is.na),
+        size = dplyr::n(),
+        replace = TRUE)
+      ),
+    discharge_count = -(lead_count - (count + intake)),
+    covid_discharge_count = discharge_count * (isolated_count / count) 
+  )
+early_occupancy = total_occupancy %>% 
+  dplyr::arrange(date) %>% 
+  dplyr::pull(count) %>%
+  `[`(1)
+lowest_occupancy = total_occupancy %>%
+  dplyr::arrange(count) %>% 
+  `[`(1,) %>%
+  dplyr::mutate(date = lubridate::as_date(date))
+dates = c(4500, 5000, 5500) %>%
+  rlang::set_names() %>% 
+  purrr::imap( ~ total_occupancy %>% 
+    dplyr::filter(date > lowest_occupancy$date + lubridate::days(5)) %>%
+    dplyr::filter(date < lubridate::ymd_hms("2020-12-01 00:00:00")) %>%
+    dplyr::mutate(distance = abs(count - .x)) %>%
+    dplyr::arrange(distance) %>%
+    dplyr::pull(date) %>%
+    dplyr::first() %>%
+    lubridate::as_date()
+  )
+
+```
+
+With these patterns of intake and discharge, the population of the jail fell
+from an early high of `r paste0(substr(early_occupancy, 1, 1), ",",
+substr(early_occupancy, 2, nchar(early_occupancy)))` in 
+`r lubridate::as_date(min(total_occupancy$date, na.rm = TRUE))` to 
+a low of `r lowest_occupancy$count` in `r lowest_occupancy$date` and quickly
+rose again to 4,500 around `r dates[['4500']]`, 5,000 around `r dates[['5000']]` and the 
+original high occupancy of circa 5,500 by `r dates[['5500']]` only
+`r difftime(dates[['5500']], lowest_occupancy$date, units = 'days')` days after the
+low point.  This pattern can also be seen in the percentage occupancy plots 
+which demonstrate that the jail was only able to keep some units at 50%
+capacity.  
+
+```{r occupancy-time-series, layout="l-body-outset", include = TRUE, fig.cap="While the depopulation of the jail early in the pandemic resulted in decreased density within the jail, later increases returned the population to near original occupancy."}
+m = 4
+pl_occ_ts = ggplot() +
+  geom_ribbon(
+    data = intake_discharge %>% dplyr::mutate(date = lubridate::as_datetime(date)),
+    aes(x = date, ymin = 0, ymax = intake),
+    fill = 'blue', alpha = 0.5
+  ) + 
+  geom_ribbon(
+    data = intake_discharge %>% dplyr::mutate(date = lubridate::as_datetime(date)),
+    aes(x = date, ymin = count - discharge_count, ymax = count),
+    fill = 'orange', alpha = 0.5
+  ) + 
+  geom_line(
+    data = total_occupancy,
+    aes(x = date, y = count)
+  ) +
+  geom_point(
+    data = dplyr::bind_rows(
+      lowest_occupancy,
+      tibble::tibble_row(date = dates[['4500']], count = 4500),
+      tibble::tibble_row(date = dates[['5000']], count = 5000),
+      tibble::tibble_row(date = dates[['5500']], count = 5500)
+    ) %>% dplyr::mutate(date = lubridate::as_datetime(date)),
+    aes(x = date, y = count),
+    colour = 'red') +
+  geom_text(
+    data = dplyr::bind_rows(
+      tibble::tibble_row(date = lowest_occupancy$date + lubridate::days(9*m),
+                         count = lowest_occupancy$count - 8*m),
+      tibble::tibble_row(date = dates[['4500']] + lubridate::days(9*m), count = 4500 - 8*m),
+      tibble::tibble_row(date = dates[['5000']] + lubridate::days(9*m), count = 5000 - 8*m),
+      tibble::tibble_row(date = dates[['5500']] + lubridate::days(9*m), count = 5500 + 35*m)
+    ) %>% dplyr::mutate(date = lubridate::as_datetime(date)),
+    aes(x = date, y = count - 20, label = lubridate::as_date(date))
+  ) + theme_minimal() + 
+      scale_x_datetime("Date") +
+      scale_y_continuous("Jail Detainee Population (count)", limits = c(0, 5800))
+print(pl_occ_ts)
+```
+
+At the same time COVID-19 cases continue to enter and exit the jail and
+propagate within the facility.  
+
+```{r testing-and-control, layout="l-body-outset", include = TRUE, fig.cap="Grey ribbon represents the cases isolated within the facility, orange ribbon represents the cases assumed released into the community as a proportion of regular releases, and the red line is the cumulative number of cases released into the community up to a time."}
+id = intake_discharge %>% dplyr::filter(!intake_imputed)
+ggplot() + 
+  geom_ribbon(
+    data = id,
+    aes(x = date, ymin = 0, ymax = isolated_count),
+    alpha = 0.5
+  ) + 
+  geom_line(
+    data = id,
+    aes(
+      x = date, 
+      y = cumsum(covid_discharge_count)
+    ),
+    color = 'red', alpha = 0.5
+  ) +
+  geom_ribbon(
+    data = id,
+    aes(x = date, ymin = 0, ymax = covid_discharge_count),
+    fill = 'orange'
+  ) + 
+  theme_minimal()
+
+
+```
+
+# Occupancy
+
+During the period April 2020 to April 2021 occupancy was reduced to 50%
+capacity in most units, with the exception of building 8 and the building
+8 RTU.  Starting in late 2020 all buildings with the exception of building 
+2 had a significant proportion of units above 55% capacity. 
+
+```{r occupancy, include = FALSE}
+unit_occupancy = params$standard_occupancy_data %>% 
+  dplyr::left_join(
+    y = params$standard_capacity_data %>% dplyr::select(building, unit, capacity),
+    by = c('unit')) %>%
+  dplyr::filter(!is.na(building)) %>% 
+  dplyr::mutate(
+    percentage = round(count / as.numeric(capacity) * 100),
+    building = paste0("Building ", building)
+  )
+
+pl = unit_occupancy %>% 
+  dplyr::pull(building) %>% 
+  unique %>% 
+  purrr::discard( ~ .x == 'Building 16') %>%
+  purrr::map( ~ ggplot() +
+      geom_line(
+        data = unit_occupancy %>% dplyr::filter(building == .x), 
+        aes(x = date, y = percentage, group = unit),
+        alpha = 0.15) + 
+      geom_line(
+        data = unit_occupancy %>% 
+          dplyr::filter(building == .x) %>%
+          dplyr::group_by(date, building) %>% 
+          dplyr::summarize(
+            occupancy = (1 - sum(percentage < 55, na.rm = TRUE)/
+                              sum(!is.na(percentage))) * 100
+          ) %>% dplyr::ungroup(),
+        aes(x = date, y = occupancy),
+        color = 'blue') +
+      facet_wrap( ~ building) + 
+      scale_x_datetime("Date") +
+      scale_y_continuous("Occupancy (%)") +
+      theme_minimal() +
+      coord_cartesian(ylim = c(0, 100))
+  )
+```
+
+```{r pl-occupancy, include = TRUE, fig.cap="Each faded black line represents the recorded occupancy (as a percentage of capacity) of each unit within a building.  The blue line represents the proportion of units above 55% occupancy." }
+o = purrr::map(pl, print)
+```
+
+# Intake testing levels
+
+Tests are done on intake but not mandatory, though compliance is consistently
+high.
+
+```{r testing-levels, layout="l-body-outset", include = TRUE, fig.cap = "Testing rate (top, black line) and observed positivity rate (bottom, black dots) and estimated (7-day averaged) positivity rate credible intervals (central 50% and central 90%)"}
+assumed_positives = 1
+assumed_tests = 100
+
+positivity = dplyr::bind_rows(
+  tibble::tibble(
+    date = lubridate::ymd_hms("2020-05-22 07:00:00"), 
+    positives = assumed_positives, tests = assumed_tests,
+    cumulative_window_positives = 1, 
+    cumulative_window_negatives = 99), 
+  params$standard_count_data %>% 
+    dplyr::transmute(
+      date = date,
+      positives = covid_count, 
+      tests = test_count) %>%
+    dplyr::filter(!is.na(positives), !is.na(tests))
+  ) %>%
+  dplyr::mutate(
+    cumulative_window_positives = positives %>% windowed(8, sum),
+    cumulative_window_negatives  = (tests - positives) %>% windowed(8, sum),
+    beta_10 = purrr::map2(cumulative_window_positives, cumulative_window_negatives,
+        ~ qbeta(p = 0.10, shape1 = .x, shape2 = .y)) %>% 
+      purrr::flatten_dbl(),
+    beta_25 = purrr::map2(cumulative_window_positives, cumulative_window_negatives,
+        ~ qbeta(p = 0.25, shape1 = .x, shape2 = .y)) %>%
+      purrr::flatten_dbl(),
+    beta_75 = purrr::map2(cumulative_window_positives, cumulative_window_negatives,
+        ~ qbeta(p = 0.75, shape1 = .x, shape2 = .y)) %>%
+      purrr::flatten_dbl(),
+    beta_90 = purrr::map2(cumulative_window_positives, cumulative_window_negatives,
+        ~ qbeta(p = 0.90, shape1 = .x, shape2 = .y)) %>%
+      purrr::flatten_dbl(),
+  )
+
+pl_testing = ggplot() +
+  geom_line(
+    data = params$standard_count_data,
+    aes(x = date, y = proportion_tested),
+    color = 'black', alpha = 0.5) +
+    theme_minimal() + 
+    theme(axis.text.x = element_blank()) +
+    scale_x_datetime("") +
+    scale_y_continuous("intake testing level (%)")
+pl_positivity = ggplot() +
+  geom_point(
+    data = params$standard_count_data,
+    aes(x = date, y = 100 * test_positivity)) +
+  geom_ribbon(
+    data = positivity,
+    aes(x = date, ymin = 100 * beta_10, ymax = 100 * beta_90),
+    fill = 'blue', alpha = 0.2) +
+  geom_ribbon(
+    data = positivity,
+    aes(x = date, ymin = 100 * beta_25, ymax = 100 * beta_75),
+    fill = 'blue', alpha = 0.2) +
+  theme_minimal() +
+  scale_x_datetime("date") +
+  scale_y_continuous("test positivity (%)")
+pl = gridExtra::arrangeGrob(pl_testing, pl_positivity, 
+  layout_matrix = matrix(data = c(1, 2, 2), nrow = 3, ncol = 1)) 
+plot.new()
+grid::grid.draw(pl)
+```
+
+# Movement
+
+
+```{r observed-movement-counts, layout="l-body-outset", include = TRUE}
+params$building_count %>%
+  dplyr::rename(`row sums` = row_sums) %>%
+  knitr::kable(caption = "Observed movement counts between buildings.")
+```
+
+```{r observed-movement-percentage, layout="l-body-outset", include = TRUE}
+params$building_percentage %>%
+  dplyr::rename(`row sums` = row_sums) %>%
+  knitr::kable(caption = "Observed percentages of movement between buildings.")
+```
+
+```{r observed-movement-within-building, layout='l-body-outset', include = TRUE}
+#unit_pl_data = params$building_count$building %>% purrr::map(
+#  ~ params$unit_mmo %>%
+#    dplyr::filter(building == .x, last_stable_building == .x)) %>%
+#  purrr::discard(~ nrow(.x) == 0) %>% 
+#  purrr::discard(~ all(.x$row_sums == 0)) %>%
+#  purrr::discard(~ all(.x$row_sums == 0)) %>%
+#  purrr::discard(~ all(.x$building %in% c("Intake", "01", "03", "05", "16", "RCDC")))
+#
+#unit_grid_pl = unit_pl_data %>% 
+#  purrr::map(~ ggplot(data = .x) + geom_raster(aes(x = unit, y = last_stable_unit, fill = percentage)))
+```
+
+```{r unit-transition-pl, layout="l-body-outset", include = TRUE, fig.cap = "Units ordered on each axis grouped within building, light blue blocks are buildings, zeros are ignored and brighter blue corresponds to more moves between units."}
+print(params$unit_transition_plot)
+```

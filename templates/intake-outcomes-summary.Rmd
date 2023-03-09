@@ -1,0 +1,109 @@
+---
+title: "Intake Simulation Summary"
+description: "Summary of a test grid simulation for jail intake"
+author:
+  - name: "Krzysztof Sakrejda"
+  - url: "https://github.com/epibayes/jail-model"
+  - affiliation: "Epibayes"
+  - affiliation_url: "https://epibayes.io"
+date: "`r Sys.Date()`"
+output: distill::distill_article
+params: 
+  simulation_name: "default-test"
+  simulation_id: "00001"
+  replicate_id: "001"
+---
+
+```{r setup, include=FALSE}
+library(magrittr)
+knitr::opts_chunk$set(echo = FALSE)
+simulation_name = params$simulation_name
+simulation_id = params$simulation_id
+replicate_id = params$replicate_id
+```
+
+```{r model-parameters, include=FALSE}
+parameters = workflow::build_dir(simulation_name, "parameter-grid.rds") %>% 
+  readRDS() %>% dplyr::filter(
+    simulation_name == simulation_name,
+    simulation_id == simulation_id,
+    replicate_id == replicate_id)
+rmarkdown::paged_table(parameters)
+```
+
+The intake simulation follows the intake diagram, with the exception that the
+mixed RTU cohort is not currently implemented.  
+
+```{r intake-diagram, layout="l-body-outset"}
+intake_fig_path = workflow::project_dir("static", "diagrams", "covid-jail-intake-diagram.svg")
+```
+
+Incoming detainees are administered
+a rapid COVID-19 test, followed by an X-ray screening for tuberculosis which can
+uncover both symptomatic and asymptomatic COVID-19 cases.  Individuals testing
+positive for COVID-19 or with abnormal chest X-rays images are effectively
+isolated (COVID-19+ together, and those with chest X-ray abnormalities are
+"Persons Under Investigation" (PUI).  Those with normal results are placed in
+daily cohorts for 14 days, retested, and then released into the general
+population.  Individuals testing negative with additional medical needs enter
+the Residential Treatment Unit (RTU) intake cohort for 14 days and are not
+cohorted into daily groups.
+
+![Diagram of the jail intake process. The three intake cohorts are COVID-19+
+(or with abnormal chest X-rays, although those are isolated separately), daily
+COVID-19 negative cohorts with daily symptomatic screening, and the mixed
+Residential Treatment Unit (RTU) intake cohort.](`r intake_fig_path`){width=100%}
+
+After 14 days, we assume all individuals are screened for COVID-19 via a PCR
+test and upon a negative test they are admitted to the general population.
+Those who are screened and test positive at any point in time join the COVID-19
+positive cohort until they are medically cleared to join the general
+population.  Those in the mixed RTU cohort enter the general RTU population
+after 14 days if negative for COVID-19 on a PCR test.
+
+We summarize the number of cohorts with undetected cases at the 14 day mark, 
+labelled as "breakthrough" cases.  Their PMF and CMF are summarized below as
+the percentage of cohorts in each category.
+
+```{r burden-pmf, layout='l-body-outset'}
+burden_pmf = workflow::artifact_dir(simulation_name, simulation_id, 
+  replicate_id, "breakthrough-cases-pmf.svg") %>% fs::path_expand()
+```
+
+![Percentage of cohorts with M undetected cases.  Most cohorts are COVID-19
+negative but a significant proportion have 1+ breakthrough cases.](`r burden_pmf`){width=100%}
+
+
+```{r burden-cmf, layout='l-body-outset'}
+burden_cmf = workflow::artifact_dir(simulation_name, simulation_id, 
+  replicate_id, "breakthrough-cases-cmf.svg") %>% fs::path_expand()
+```
+
+![Percentage of cohorts with at least M undetected cases.  Most cohorts include
+no COVID-19 positive individuals, so effects on general population epidemics
+are driven by a small number of cases that break through the cohorting 
+procedure.](`r burden_cmf`){width=100%}
+
+```{r burden-over-time, layout='l-body-outset'}
+burden_time = workflow::artifact_dir(simulation_name, simulation_id, 
+  replicate_id, "breakthrough-cases-case-percent.svg") %>% fs::path_expand()
+```
+ 
+![The frequency of cohorts with, 1, 2, 3, or 4+ cases.  Over the first 14 days
+the frequency of cohorts with nonzero cases drops. At day 14 after PCR 
+testing the number of cohorts with 1 breakthrough case rises as cases are 
+removed from higher-burden cohorts.  
+](`r burden_time`){width=100%}
+
+
+```{r overall_trace, layout='l-body-outset'}
+overall_trace = workflow::artifact_dir(simulation_name, simulation_id, 
+  replicate_id, "summary-trace-plot.svg") %>% fs::path_expand()
+```
+ 
+![Incidence of new cases is distributed over much of the cohorting
+period as exposed but non-infectious individuals can not be detected in initial 
+screening.  Secondary cases can develop over much of the cohorting period and 
+the average number of undetected cases is relatively consistent during this
+period.  At day 14 more cases are detected and isolated but which reduced
+but does not eliminate breakthrough cases.](`r overall_trace`){width=100%}
